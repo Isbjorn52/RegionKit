@@ -1,10 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.Runtime.CompilerServices;
+using EffExt;
 using Mono.Cecil.Cil;
 using MonoMod.Cil;
 
@@ -12,96 +7,34 @@ namespace RegionKit.Modules.Misc;
 
 internal static class ColoredCeilingDrips
 {
-	private static Dictionary<string, Color> regionCeilingDripColors = new Dictionary<string, Color>();
-
 	public static void Enable()
 	{
-		On.Region.ctor += Region_ctor;
         On.WaterDrip.DrawSprites += WaterDrip_DrawSprites;
-		IL.Room.Update += Room_Update;
+		IL.Room.Update += IL_Room_Update;
 	}
 
 	public static void Disable()
 	{
-		On.Region.ctor -= Region_ctor;
 		On.WaterDrip.DrawSprites -= WaterDrip_DrawSprites;
-		IL.Room.Update -= Room_Update;
+		IL.Room.Update -= IL_Room_Update;
 	}
 
-	private static void Region_ctor(On.Region.orig_ctor orig, Region self, string name, int firstRoomIndex, int regionNumber, SlugcatStats.Name storyIndex)
+	public static void Setup()
 	{
-		orig(self, name, firstRoomIndex, regionNumber, storyIndex);
+		EffectDefinitionBuilder builder = new EffectDefinitionBuilder("Ceiling Drips Color");
 
-		string text = "";
+		builder
+			.AddFloatField("v", 0f, 1f, 0.01f, 1f, "Brightness")
+			.AddFloatField("s", 0f, 1f, 0.01f, 0f, "Saturation")
+			.AddFloatField("h", 0f, 1f, 0.01f, 0f, "Hue")
+			.SetEffectInitializer(CeilingDripsColorEffectInitializer)
+			.SetCategory("RegionKit") 
+			.Register(); 
+	}
 
-		if (storyIndex != null)
-		{
-			text = "-" + storyIndex.value;
-		}
-		string path = AssetManager.ResolveFilePath(string.Concat(new string[]
-		{
-			"World",
-			Path.DirectorySeparatorChar.ToString(),
-			name,
-			Path.DirectorySeparatorChar.ToString(),
-			"properties",
-			text,
-			".txt"
-		}));
-		if (text != "" && !File.Exists(path))
-		{
-			path = AssetManager.ResolveFilePath(string.Concat(new string[]
-			{
-				"World",
-				Path.DirectorySeparatorChar.ToString(),
-				name,
-				Path.DirectorySeparatorChar.ToString(),
-				"properties.txt"
-			}));
-		}
-
-		if (File.Exists(path))
-		{
-
-			Debug.Log("File exists at " + path);
-			string[] array = File.ReadAllLines(path);
-
-			for (int i = 0; i < array.Length; i++)
-			{
-				string[] array2 = array[i].Split(new string[] { ":", ": " }, StringSplitOptions.None);
-
-				if (array2[0].ToLower() == "ceilingdripscolor")
-				{
-					string[] array3 = array2[1].Split(',');
-
-					Color color = new Color(
-						float.Parse(array3[0]),
-						float.Parse(array3[1]),
-						float.Parse(array3[2])
-						);
-
-					Debug.Log("Color found");
-					Debug.Log(color.r);
-					Debug.Log(color.g);
-					Debug.Log(color.b);
-
-					//self.regionParams.GetData().ceilingDripsColor = color;
-					//self.regionParams.GetData().ceilingDripsColor = color;
-					if (!regionCeilingDripColors.ContainsKey(self.name))
-					{
-						regionCeilingDripColors.Add(self.name, color);
-						Debug.Log("new key!");
-
-					}
-					else
-					{
-						Debug.Log("not new key!");
-
-						regionCeilingDripColors[self.name] = color;
-					}
-				}
-			}
-		}
+	private static void CeilingDripsColorEffectInitializer(Room room, EffectExtraData data, bool firstTimeRealized)
+	{
+		room.GetData().ceilingDripsColor = Color.HSVToRGB(data.GetFloat("h"), data.GetFloat("s"), data.GetFloat("v"));
 	}
 
 	private static void WaterDrip_DrawSprites(On.WaterDrip.orig_DrawSprites orig, WaterDrip self, RoomCamera.SpriteLeaser sLeaser, RoomCamera rCam, float timeStacker, Vector2 camPos)
@@ -110,13 +43,15 @@ internal static class ColoredCeilingDrips
 		{
 			if (self.room == null) return;
 
-			if (regionCeilingDripColors.TryGetValue(self.room.world.region.name, out Color color))
+			Color? color = self.room.GetData().ceilingDripsColor;
+
+			if (color != null)
 			{
 				self.colors = new Color[]
 				{
 					rCam.currentPalette.blackColor,
-					Color.Lerp(rCam.currentPalette.blackColor, color, 0.5f),
-					color
+					Color.Lerp(rCam.currentPalette.blackColor, color.Value, 0.5f),
+					color.Value
 				};
 			}
 		}
@@ -124,24 +59,23 @@ internal static class ColoredCeilingDrips
 		orig(self, sLeaser, rCam, timeStacker, camPos);
 	}
 
-	private static void Room_Update(ILContext il)
+	private static void IL_Room_Update(ILContext il)
 	{
 		ILCursor cursor = new ILCursor(il);
 
-		cursor.GotoNext(
-			x => x.MatchNewobj<WaterDrip>()
+		cursor.GotoNext(MoveType.After,
+			x => x.MatchNewobj<WaterDrip>(),
+			x => x.MatchCall<Room>(nameof(Room.AddObject))
 			);
 
-		cursor.Index += 2;
-
 		cursor.Emit(OpCodes.Ldarg_0);
-
 		cursor.EmitDelegate<Action<Room>>((self) =>
 		{
 			(self.updateList[self.updateList.Count - 1] as WaterDrip).GetData().isCeilingDrip = true;
 		});
 	}
 
+	#region Extentions
 
 	private static readonly ConditionalWeakTable<WaterDrip, WaterDripData> waterDripCWT = new ConditionalWeakTable<WaterDrip, WaterDripData>();
 
@@ -162,4 +96,26 @@ internal static class ColoredCeilingDrips
 
 		return waterDripData;
 	}
+
+	private static ConditionalWeakTable<Room, RoomData> roomCWT = new ConditionalWeakTable<Room, RoomData>();
+
+	public class RoomData
+	{
+		public Color? ceilingDripsColor;
+
+		public RoomData() { }
+	}
+
+	public static RoomData GetData(this Room waterDrip)
+	{
+		if (!roomCWT.TryGetValue(waterDrip, out RoomData waterDripData))
+		{
+			waterDripData = new RoomData();
+			roomCWT.Add(waterDrip, waterDripData);
+		}
+
+		return waterDripData;
+	}
+
+	#endregion
 }

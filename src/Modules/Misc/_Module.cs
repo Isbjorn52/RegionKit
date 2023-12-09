@@ -8,6 +8,7 @@ internal static class _Module
 	{
 		_Enums.Register();
 		ExtendedGates.InitExLocks();
+		ColoredCeilingDrips.Setup();
 	}
 	public static void Enable()
 	{
